@@ -1,8 +1,9 @@
 import threading
 import time
 from multiprocessing.pool import ThreadPool
+import random
 
-N_SECONDS_TO_DELAY = 1
+N_SECONDS_TO_DELAY = 10
 N_LEAF_FACTOR = 2
 
 
@@ -11,6 +12,10 @@ class PseudoTree:
     simple tree, each node is integer value, where each parent node = sum if its children
     nonetheless, build logic is same as in dataheroes tree
     """
+
+    def take_delay(self):
+        time.sleep(self.n_seconds_to_delay * random.randint(1, 3))
+
     def __init__(self, n_leaves):
         self.n_leaves = n_leaves
         self.tree = [[]]
@@ -18,7 +23,7 @@ class PseudoTree:
         self.leaf_factor = N_LEAF_FACTOR
 
     def _create_father_node(self, father_level, fs_idx):
-        time.sleep(self.n_seconds_to_delay)
+        self.take_delay()
         return sum(self.tree[father_level-1][fs_idx: fs_idx + self.leaf_factor])
     
     def update_tree(self):
@@ -38,7 +43,7 @@ class PseudoTree:
             level += 1
 
     def add_leaf(self, value):
-        time.sleep(self.n_seconds_to_delay)
+        self.take_delay()
         self.tree[0].append(value)
         self.update_tree()
 
@@ -144,7 +149,7 @@ class PseudoTreeParallelFull(PseudoTree):
             self.tree[father_level].append(node)
 
     def add_leaf(self, value):
-        time.sleep(self.n_seconds_to_delay)
+        self.take_delay()
         self.tree[0].append(value)
         # only create a leaf
         # self.update_tree()
@@ -212,24 +217,38 @@ class PseudoTreeParallelFull(PseudoTree):
 
 
 # ===========================================================================================
-tree = PseudoTree(16)
-t = time.time()
-tree.build()
-print(f'================{tree.__class__.__name__}================')
-print(f'time for one node={tree.n_seconds_to_delay};\n{tree.n_leaves=}\nbuild time={time.time()-t:.2f}')
-print(f'tree.tree=\n{tree.tree}'.replace('], [', '],\n ['))
+n_iter = 5
+times_simple = []
+times_leaves = []
+times_full = []
 
-tree = PseudoTreeParallelLeavesOnly(16)
-t = time.time()
-tree.build()
-print(f'================{tree.__class__.__name__}================')
-print(f'time for one node={tree.n_seconds_to_delay};\n{tree.n_leaves=}\nbuild time={time.time()-t:.2f}')
-print(f'tree.tree=\n{tree.tree}'.replace('], [', '],\n ['))
+for _ in range(n_iter):
+    tree = PseudoTree(16)
+    t = time.time()
+    tree.build()
+    print(f'================{tree.__class__.__name__}================')
+    print(f'time for one node={tree.n_seconds_to_delay};\n{tree.n_leaves=}\nbuild time={time.time()-t:.2f}')
+    print(f'tree.tree=\n{tree.tree}'.replace('], [', '],\n ['))
+    times_simple.append(time.time()-t)
 
+for _ in range(n_iter):
+    tree = PseudoTreeParallelLeavesOnly(16)
+    t = time.time()
+    tree.build()
+    print(f'================{tree.__class__.__name__}================')
+    print(f'time for one node={tree.n_seconds_to_delay};\n{tree.n_leaves=}\nbuild time={time.time()-t:.2f}')
+    print(f'tree.tree=\n{tree.tree}'.replace('], [', '],\n ['))
+    times_leaves.append(time.time() - t)
 
-tree = PseudoTreeParallelFull(16)
-t = time.time()
-tree.build()
-print(f'================{tree.__class__.__name__}================')
-print(f'time for one node={tree.n_seconds_to_delay};\n{tree.n_leaves=}\nbuild time={time.time()-t:.2f}')
-print(f'tree.tree=\n{tree.tree}'.replace('], [', '],\n ['))
+for _ in range(n_iter):
+    tree = PseudoTreeParallelFull(16)
+    t = time.time()
+    tree.build()
+    print(f'================{tree.__class__.__name__}================')
+    print(f'time for one node={tree.n_seconds_to_delay};\n{tree.n_leaves=}\nbuild time={time.time()-t:.2f}')
+    print(f'tree.tree=\n{tree.tree}'.replace('], [', '],\n ['))
+    times_full.append(time.time() - t)
+
+print(f'{sum(times_simple)/n_iter=}')
+print(f'{sum(times_leaves)/n_iter=}')
+print(f'{sum(times_full)/n_iter=}')
