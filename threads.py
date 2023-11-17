@@ -93,7 +93,7 @@ class Executor:
                         del self.queue[task_idx]
                     run_a_task = True
                 else:
-                    print(f'{task_idx=}')
+                    #print(f'{task_idx=}')
                     task_idx += 1
         if self.debug:
             print(f'no tasks in queue anymore! waiting to pool to be executed')
@@ -103,8 +103,7 @@ class Executor:
 
 class PseudoTreeParallelLeavesOnly(PseudoTree):
     """
-    simple tree, each node is integer value, where each parent node = sum if its children
-    nonetheless, build logic is same as in dataheroes tree
+    parallel on the leaf level only
     """
 
     def __init__(self, n_leaves):
@@ -127,121 +126,108 @@ class PseudoTreeParallelLeavesOnly(PseudoTree):
         self.executor.run()
 
 
-class PseudoTreeParallelFull:
+class PseudoTreeParallelFull(PseudoTree):
     """
-    simple tree, each node is integer value, where each parent node = sum if its children
-    nonetheless, build logic is same as in dataheroes tree
+    Fully parallel, that means that we could create nodes on all levels in different threads
     """
 
     def __init__(self, n_leaves):
         self.executor = None
-        self.n_leaves = n_leaves
-        self.tree = [[]]
-        self.n_seconds_to_delay = 1
-        self.leaf_factor = 2
-        self.queue = []
+        super().__init__(n_leaves=n_leaves)
 
-    def is_list_ready(self, required_node_list):
-        for node in required_node_list:
-            if node['level'] + 1 > len(self.tree):
-                return False
-            if node['node_idx'] + 1 > len(self.tree[node['level']]):
-                return False
-        return True
-
-    def add_to_queue(self, required_node_list, call, args):
-        print(f'add to queue! {args}')
-        self.queue.append({'required_node_list': required_node_list, 'call': call, 'args': args})
-
-    def check_queue(self):
-        # exit if there are no tasks
-        if len(self.queue) == 0:
-            return 'FINISHED'
-        for task in self.queue:
-            if self.is_list_ready(task['required_node_list']):
-                task['call'](task['args'])
-                # EXEC
-                return 'EXEC'
-        # should wait
-        return 'WAIT'
-
-    def _create_father_node(self, father_level, fs_idx):
-        time.sleep(self.n_seconds_to_delay)
-        return sum(self.tree[father_level - 1][fs_idx: fs_idx + self.leaf_factor])
-
-    def update_tree(self):
-        level = 0  # Level
-
-        # add new root if needed
-        if len(self.tree[0]) == self.leaf_factor ** len(self.tree):
-            self.tree.append([])
-
-        # create father for each layer if it's full
-        while len(self.tree[level]) % self.leaf_factor == 0:
-            father_level = level + 1
-            # first son idxs of the new father (rightmost one)
-            fs_idx = len(self.tree[level]) - len(self.tree[level]) % self.leaf_factor - self.leaf_factor
-            node = self._create_father_node(father_level, fs_idx)
+    def _create_father_node_parallel(self, node):
+        father_level, fs_idx = node
+        node = self._create_father_node(father_level, fs_idx)
+        with self.executor.running_processes_lock:
+            if len(self.tree) < father_level + 1:
+                self.tree.append([])
             self.tree[father_level].append(node)
-            level += 1
 
     def add_leaf(self, value):
-        print(f'add leaf {self=} {value=}')
         time.sleep(self.n_seconds_to_delay)
         self.tree[0].append(value)
-        self.update_tree()
+        # only create a leaf
+        # self.update_tree()
+
+    def _get_tree_by_n_leaves(self, n_leaves):
+        result_tree = [[]]
+        for i in range(n_leaves):
+            result_tree[0].append(i)
+            level = 0  # Level
+            # add new root if needed
+            if len(result_tree[0]) == self.leaf_factor ** len(result_tree):
+                result_tree.append([])
+            # create father for each layer if it's full
+            while len(result_tree[level]) % self.leaf_factor == 0:
+                father_level = level + 1
+                # first son idxs of the new father (rightmost one)
+                fs_idx = len(result_tree[level]) - len(result_tree[level]) % self.leaf_factor - self.leaf_factor
+                result_tree[father_level].append(fs_idx)
+                level += 1
+        return result_tree
+
+    def _get_diff_for_leaf(self, leaf_index):
+        # leaf_index starts with 0
+        tree_old = self._get_tree_by_n_leaves(leaf_index)
+        tree_new = self._get_tree_by_n_leaves(leaf_index+1)
+        new_nodes = []
+        for level_idx, level in enumerate(tree_new):
+            if level_idx > 0:
+                if level_idx + 1 > len(tree_old):
+                    new_nodes += [(level_idx, node_idx) for node_idx in tree_new[level_idx]]
+                else:
+                    new_nodes += [(level_idx, node_idx) for node_idx in tree_new[level_idx]
+                                  if node_idx not in tree_old[level_idx]]
+        return new_nodes
+
+    def node_could_be_added(self, node):
+        level_index = node[0]
+        node_index = node[1]
+        if len(self.tree) <= level_index - 1:
+            # level does not exist yet
+            return False
+        if len(self.tree[level_index-1]) <= node_index + self.leaf_factor - 1:
+            # children do not exist yet
+            return False
+        return True
 
     def build(self):
-        self.queue = []
-        self.executor = Executor(n_nodes=1000, debug=True)
+        self.executor = Executor(n_nodes=1000)
         for i in range(self.n_leaves):
-            #tree.add_leaf(i)
+            # add leaves
             self.executor.add_to_queue(task={
                 'condition': None,
                 'call': self.add_leaf,
                 'args':  [i]
             })
+            # add one task for each linked parent leaves
+            nodes_to_add = self._get_diff_for_leaf(i)
+            for node in nodes_to_add:
+                self.executor.add_to_queue(task={
+                    'condition': self.node_could_be_added,
+                    'call': self._create_father_node_parallel,
+                    'args': [node]
+                })
         self.executor.run()
 
 
-total = []
-executor = Executor(n_nodes=10, debug=True)
-
-
-def handle_task(i, t):
-    time.sleep(1)
-    t.append(i)
-
-    if (2*i > 8) and (2*i < 300):
-        executor.add_to_queue(task={
-            'condition': check_condition,
-            'call': handle_task,
-            'args': (2*i, total)
-        })
-    print(f'{executor.queue=}')
-    print(f'{executor.pool._processes=}')
-
-    return i
-
-def check_condition(i, t):
-    return True #and i == 0 or (i-1 in t)
-
-"""
-for i in range(100):
-    executor.add_to_queue(task={
-        'condition': check_condition,
-        'call': handle_task,
-        'args': (i, total)
-    })
-
+# ===========================================================================================
+tree = PseudoTree(16)
 t = time.time()
-print(f'{total}')
-executor.run()
-print(f'{total} {time.time()-t=}')
-exit(0)
-"""
+tree.build()
+print(f'================{tree.__class__.__name__}================')
+print(f'time for one node={tree.n_seconds_to_delay};\n{tree.n_leaves=}\nbuild time={time.time()-t:.2f}')
+print(f'tree.tree=\n{tree.tree}'.replace('], [', '],\n ['))
 
 tree = PseudoTreeParallelLeavesOnly(16)
+t = time.time()
+tree.build()
+print(f'================{tree.__class__.__name__}================')
+print(f'time for one node={tree.n_seconds_to_delay};\n{tree.n_leaves=}\nbuild time={time.time()-t:.2f}')
+print(f'tree.tree=\n{tree.tree}'.replace('], [', '],\n ['))
+
+
+tree = PseudoTreeParallelFull(16)
 t = time.time()
 tree.build()
 print(f'================{tree.__class__.__name__}================')
